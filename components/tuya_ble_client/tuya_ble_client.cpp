@@ -170,11 +170,13 @@ void TuyaBLEClient::collect_data(unsigned char *data, size_t size) {
   // unconditional before any length check existed.
   if(size < 1) {
     ESP_LOGW(TAG, "Received empty BLE notification, ignoring");
+    this->reset_rx_state();
     return;
   }
 
   if(data[0] != 0x00 && data[0] != this->data_collection_incrementor + 1) {
     ESP_LOGW(TAG, "Received data packet with incorrect incrementor. Expected %i, got %i. Data rejected.", this->data_collection_incrementor + 1, data[0]);
+    this->reset_rx_state();
     return;
   }
   
