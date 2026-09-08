@@ -33,15 +33,7 @@ jobs:
       - name: Prepare config
         run: |
           cp secrets.yaml.example secrets.yaml
-          python3 -c "
-import base64, secrets
-key = base64.b64encode(secrets.token_bytes(32)).decode()
-with open('secrets.yaml') as f:
-    content = f.read()
-content = content.replace('choose-a-32-byte-base64-key-or-run-esphome-to-generate-one', key)
-with open('secrets.yaml', 'w') as f:
-    f.write(content)
-"
+          python3 -c "import base64, secrets, pathlib; p = pathlib.Path('secrets.yaml'); p.write_text(p.read_text().replace('choose-a-32-byte-base64-key-or-run-esphome-to-generate-one', base64.b64encode(secrets.token_bytes(32)).decode()))"
           sed -i 's/level: DEBUG/level: ${{ matrix.logger_level }}/' example_config.yaml
 
       - name: Compile
