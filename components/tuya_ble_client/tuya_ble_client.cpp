@@ -165,6 +165,14 @@ void TuyaBLEClient::collect_data(unsigned char *data, size_t size) {
   size_t data_starts_at = 1;
   size_t concatenated_length = 0;
 
+  // A malformed/truncated GATT notification (size 0-2) would otherwise read
+  // data[0]/data[1]/data[2] out of bounds below - these accesses are
+  // unconditional before any length check existed.
+  if(size < 1) {
+    ESP_LOGW(TAG, "Received empty BLE notification, ignoring");
+    return;
+  }
+
   if(data[0] != 0x00 && data[0] != this->data_collection_incrementor + 1) {
     ESP_LOGW(TAG, "Received data packet with incorrect incrementor. Expected %i, got %i. Data rejected.", this->data_collection_incrementor + 1, data[0]);
     return;
@@ -173,9 +181,17 @@ void TuyaBLEClient::collect_data(unsigned char *data, size_t size) {
   this->data_collection_incrementor = data[0];
 
   if(data[0] == 0x00) { // if new sequence of packets is received; reset (do not wait for potential existing sequence to finish)
+    if(size < 2) {
+      ESP_LOGW(TAG, "Initial BLE fragment too short to contain a length byte, ignoring");
+      return;
+    }
     this->data_collection_state = DataCollectionState::COLLECTING;
     this->data_collection_expected_size = data[1];
     if(data[1] >= 128) {
+      if(size < 3) {
+        ESP_LOGW(TAG, "Initial BLE fragment too short to contain a varint continuation byte, ignoring");
+        return;
+      }
       data_starts_at ++;
       if(data[2] > 1) {
         ESP_LOGE(TAG, "Length (%i) of received data above 255. No code written to handle this!", data[1]);
@@ -220,6 +236,7 @@ void TuyaBLEClient::reset_rx_state() {
 void TuyaBLEClient::process_data(TYBLENode *node) {
   if(this->data_collection_state != DataCollectionState::COLLECTED || this->data_collection_expected_size <= IV_SIZE + 1) { // Should be a multiple of 16 as well?
     ESP_LOGW(TAG, "Attempt to process received data aborted");
+    this->reset_rx_state();
     return;
   }
 
