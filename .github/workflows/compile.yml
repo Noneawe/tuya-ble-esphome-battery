@@ -1,0 +1,40 @@
+name: Compile check
+
+# Just compiles example_config.yaml - no hardware involved. This exists
+# specifically because a real bug (an ESPHome API type change breaking a
+# .c_str() call) once slipped through because it only surfaced at
+# `logger: level: VERBOSE`, which the example config doesn't use by
+# default, and which nobody happens to test with unless actively debugging
+# BLE - so the DEBUG-level matrix leg alone would not have caught it.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        logger_level: [DEBUG, VERBOSE]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ESPHome
+        run: pip install esphome
+
+      - name: Prepare config
+        run: |
+          cp secrets.yaml.example secrets.yaml
+          sed -i 's/api_encryption_key:.*/api_encryption_key: "'"$(python3 -c 'import secrets,base64;print(base64.b64encode(secrets.token_bytes(32)).decode())')"'"/' secrets.yaml
+          sed -i 's/level: DEBUG/level: ${{ matrix.logger_level }}/' example_config.yaml
+
+      - name: Compile
+        run: esphome compile example_config.yaml

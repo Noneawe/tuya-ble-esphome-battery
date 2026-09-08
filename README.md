@@ -202,6 +202,36 @@ trusting that it happened to compile before:
   the class actually defined in `tuya_ble`. Legal C++, not an accident, but
   a legitimate thing to ask for proof of rather than take on faith.
 
+### Round 3 (same day)
+
+A third pass caught two more real bugs, both from the "looks fine, works by
+accident on this exact platform" category, plus one instance of round 1's
+own bounds-checking pattern not being applied everywhere it should have
+been:
+
+- **`nodes_i` (the round-robin iterator over registered nodes) started
+  life equal to `nodes.end()`** (the map is empty when the member
+  initializer runs), and `register_node()` never updates it. `loop()`'s
+  round-robin logic then did `nodes_i = next(nodes_i)` *before* checking
+  for `end()` - incrementing an iterator that's already at `end()` is
+  undefined behavior, on literally the very first call, regardless of how
+  many nodes are configured. Fixed by checking for `end()` before
+  advancing, not after.
+- **A real ESPHome API compile break was hiding behind the logger
+  level.** `gattc_event_handler()`'s one remaining `ESP_LOGV(...,
+  this->address_str_.c_str(), ...)` (a leftover from before `address_str_`
+  became a plain `char[]`) only gets compiled in at all when
+  `logger: level: VERBOSE` - so `example_config.yaml`'s default `DEBUG`
+  level was silently skipping right past it. Fixed the call, and added a
+  from-scratch `esphome compile` at both `DEBUG` and `VERBOSE` to CI
+  specifically so this class of bug can't hide again.
+- The frame-parser cleanup (clearing `data_collected` and resetting the
+  receive state machine) that round 1 added in a couple of spots wasn't
+  applied on two early-return paths (`DEVICE INFO response too short` /
+  `PAIR response too short`) - a malformed short response on either of
+  those could leave the parser stuck mid-state. Consolidated all of it into
+  one `reset_rx_state()` helper, called on every exit path.
+
 Not fixed, and deliberately out of scope for now (see `docs/troubleshooting.md`
 for why): full CRC16 verification of every received frame beyond the length
 sanity check above, and `secKey`/protocol-v2 support (`0x0E`/`0x0F` security

@@ -212,6 +212,11 @@ void TuyaBLEClient::collect_data(unsigned char *data, size_t size) {
   }
 }
 
+void TuyaBLEClient::reset_rx_state() {
+  this->data_collected.clear();
+  this->data_collection_state = DataCollectionState::NO_DATA;
+}
+
 void TuyaBLEClient::process_data(TYBLENode *node) {
   if(this->data_collection_state != DataCollectionState::COLLECTED || this->data_collection_expected_size <= IV_SIZE + 1) { // Should be a multiple of 16 as well?
     ESP_LOGW(TAG, "Attempt to process received data aborted");
@@ -230,8 +235,7 @@ void TuyaBLEClient::process_data(TYBLENode *node) {
     // instead of falling through to decrypt_data() with an uninitialized
     // key pointer.
     ESP_LOGW(TAG, "Received AUTH_KEY-secured frame, which isn't supported. Dropping it.");
-    this->data_collected.clear();
-    this->data_collection_state = DataCollectionState::NO_DATA;
+    this->reset_rx_state();
     return;
   }
   else if(security_flag == Security::SESSION_KEY) {
@@ -239,8 +243,7 @@ void TuyaBLEClient::process_data(TYBLENode *node) {
   }
   else {
     ESP_LOGW(TAG, "Received frame with unrecognized security_flag=0x%02x. Dropping it.", security_flag);
-    this->data_collected.clear();
-    this->data_collection_state = DataCollectionState::NO_DATA;
+    this->reset_rx_state();
     return;
   }
 
@@ -284,8 +287,7 @@ void TuyaBLEClient::process_data(TYBLENode *node) {
   if(decrypted_size > MAX_PLAUSIBLE_DECRYPTED_SIZE || decrypted_size > max_size_from_received_data) {
     ESP_LOGW(TAG, "Decrypted frame claims size %u but only %u bytes were actually received (code=0x%04X) - likely a wrong local_key or corrupted frame. Dropping it.",
              decrypted_size, max_size_from_received_data, code);
-    this->data_collected.clear();
-    this->data_collection_state = DataCollectionState::NO_DATA;
+    this->reset_rx_state();
     return;
   }
 
@@ -307,6 +309,7 @@ void TuyaBLEClient::process_data(TYBLENode *node) {
         {
           if(decrypted_size < 12) {
             ESP_LOGD(TAG, "DEVICE INFO response too short");
+            this->reset_rx_state();
             return;
           }
           // Stack-allocated: this runs on every reconnect now that polling
@@ -329,6 +332,7 @@ void TuyaBLEClient::process_data(TYBLENode *node) {
         {
           if(decrypted_size < 1) {
             ESP_LOGD(TAG, "PAIR response too short");
+            this->reset_rx_state();
             return;
           }
           if(decrypted_data[0] == 0 || decrypted_data[0] == 2) { // Pair success or already paired
@@ -348,8 +352,7 @@ void TuyaBLEClient::process_data(TYBLENode *node) {
     }
   }
   
-  this->data_collected.clear();
-  this->data_collection_state = DataCollectionState::NO_DATA;
+  this->reset_rx_state();
 }
 
 bool TuyaBLEClient::register_for_notifications() {
@@ -424,7 +427,7 @@ void TuyaBLEClient::on_shutdown() {
 }
 
 bool TuyaBLEClient::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if, esp_ble_gattc_cb_param_t *param) {
-  ESP_LOGV(TAG, "[%d] [%s] gattc_event_handler: event=%d gattc_if=%d", this->connection_index_, this->address_str_.c_str(), event, gattc_if);
+  ESP_LOGV(TAG, "[%d] [%s] gattc_event_handler: event=%d gattc_if=%d", this->connection_index_, this->address_str_, event, gattc_if);
 
   if (!esp32_ble_client::BLEClientBase::gattc_event_handler(event, gattc_if, param))
     return false;
@@ -562,9 +565,20 @@ void TuyaBLEClient::loop() {
     }
   }
   else if(this->nodes.size() > 0) {
-    this->nodes_i = next(this->nodes_i);
+    // nodes_i is initialized to nodes.begin() while the map is still empty
+    // (i.e. it's effectively nodes.end() until the first node is
+    // registered, and register_node() never updates it). Incrementing an
+    // iterator that's already at end() - which the old
+    // `nodes_i = next(nodes_i); if (nodes_i == end()) ...` order did on
+    // every first call - is undefined behavior, so check for end() before
+    // advancing, not after.
     if(this->nodes_i == this->nodes.end()) {
       this->nodes_i = this->nodes.begin();
+    } else {
+      ++this->nodes_i;
+      if(this->nodes_i == this->nodes.end()) {
+        this->nodes_i = this->nodes.begin();
+      }
     }
     if(this->nodes_i->first != 0) {
       if(this->nodes_i->second->has_command() && this->nodes_i->second->has_session_key()) {

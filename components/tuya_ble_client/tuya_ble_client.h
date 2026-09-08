@@ -110,6 +110,13 @@ class TuyaBLEClient : public esp32_ble_client::BLEClientBase, virtual public TYB
 
     void process_data(TYBLENode *node);
 
+    // Clears the receive-frame state machine back to idle. Every early
+    // return out of process_data() must go through this - a return that
+    // skips it leaves data_collection_state stuck at COLLECTED, which is
+    // relied on elsewhere to mean "there's a complete, not-yet-processed
+    // frame in data_collected".
+    void reset_rx_state();
+
     // Returns true if a CCCD write was issued and the caller should wait for
     // its ESP_GATTC_WRITE_DESCR_EVT confirmation before sending anything
     // encrypted (see gattc_event_handler); false if there was nothing to
