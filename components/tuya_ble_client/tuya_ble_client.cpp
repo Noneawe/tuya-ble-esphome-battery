@@ -291,6 +291,21 @@ void TuyaBLEClient::process_data(TYBLENode *node) {
   size_t decrypted_size;
   uint32_t response_to;
 
+  // decrypt_data()'s 4th arg (AES_BLOCK_SIZE here) is what actually drives
+  // esp_aes_crypt_cbc's read length from data_collected - not the
+  // encrypted_size passed as the 2nd arg, which the function never uses.
+  // The top-of-function guard above only requires expected_size > IV_SIZE+1
+  // (i.e. >17), which is not enough to guarantee a full AES block is
+  // actually present past start_pos - an expected_size of e.g. 20 would
+  // pass that guard and then read 16 bytes from data_collected[17], well
+  // past the vector's real size(). Check the real requirement here instead.
+  if(this->data_collection_expected_size < start_pos + AES_BLOCK_SIZE) {
+    ESP_LOGW(TAG, "Encrypted frame too short to contain one AES block (expected_size=%u, need >= %u). Dropping it.",
+             this->data_collection_expected_size, (unsigned)(start_pos + AES_BLOCK_SIZE));
+    this->reset_rx_state();
+    return;
+  }
+
   // Decrypt first AES_BLOCK_SIZE (16 bytes), to get the meta data (Meta data is only 12 bytes long though, so there might be up to 4 bytes of data in this block as well):
   std::tie(seq_num, code, decrypted_size, response_to) = decrypt_data(&this->data_collected[start_pos], this->data_collection_expected_size - start_pos, first_decrypted_part, AES_BLOCK_SIZE, key, &this->data_collected[1]);
   
