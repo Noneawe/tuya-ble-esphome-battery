@@ -125,7 +125,12 @@ class TYBLEClient {
     virtual void set_disconnect_callback(std::function<void()> &&f);
     virtual bool parse_device(const esp32_ble_tracker::ESPBTDevice &device);
     virtual void write_data(TuyaBLECode code, uint32_t *seq_num, unsigned char *data, size_t size, unsigned char *key, uint32_t response_to = 0, int protocol_version = 3);
-    esp32_ble_tracker::ClientState state() const { return state_; }
+    // Must be virtual: tuya_ble_tracker holds nodes by TYBLEClient*, and its
+    // connection-timeout check calls state() through that base pointer. A
+    // non-virtual state() here would always return this class's own never-
+    // updated state_ member instead of dispatching to TuyaBLEClient's real
+    // state, silently disabling that timeout.
+    virtual esp32_ble_tracker::ClientState state() const { return state_; }
 };
 
   std::string binary_to_string(unsigned char *data, size_t size);

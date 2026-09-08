@@ -8,7 +8,7 @@ DEPENDENCIES = ["tuya_ble_client", "esp32"]
 
 tuya_ble_node_ns = cg.esphome_ns.namespace("tuya_ble_node")
 
-TuyaBLENode = tuya_ble_node_ns.class_("TuyaBLENode", cg.Component)
+TuyaBLENode = tuya_ble_node_ns.class_("TuyaBLENode", cg.PollingComponent)
 
 CONF_DEVICE_ID = 'device_id'
 CONF_LOCAL_KEY = 'local_key'
@@ -28,7 +28,12 @@ CONFIG_SCHEMA = (
             cv.Optional(CONF_MAX_QUEUED, default=1): cv.int_range(1, 10),
         }
     )
-    .extend(cv.COMPONENT_SCHEMA)
+    # Gives us `update_interval:` (default 60s) for free, handled by
+    # cg.register_component() below. A node with only write-capable
+    # `output` DPs and no sensors doesn't need this, but update() is a
+    # no-op in that case (see tuya_ble_node.cpp) so it's harmless to always
+    # have it configurable.
+    .extend(cv.polling_component_schema("60s"))
     .extend(tuya_ble_client.TUYA_BLE_CLIENT_SCHEMA)
 )
 

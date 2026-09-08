@@ -5,6 +5,28 @@ namespace tuya_ble_node {
 
 static const char *const TAG = "tuya_ble_node";
 
+void TuyaBLENode::update() {
+  if(!this->has_dp_listeners()) {
+    // Nothing registered wants periodic DP data (e.g. an output-only node);
+    // there's nothing to do here.
+    return;
+  }
+  if(this->has_client && this->client->connected()) {
+    // A BLE exchange (for this node or another one sharing the same
+    // tuya_ble_client) is already in flight; don't interrupt it. It'll be
+    // picked up again on the next update_interval tick.
+    ESP_LOGD(TAG, "Skipping scheduled update, a BLE exchange is already in progress");
+    return;
+  }
+  ESP_LOGD(TAG, "Scheduled update: will request a fresh DP status read");
+  // Resetting the session key is enough: tuya_ble_tracker only initiates a
+  // new connection for a node once has_session_key() is false, so this
+  // alone triggers the whole connect -> pair -> request_status flow again
+  // next time this device's advertisement is seen, without needing any
+  // separate reconnect path.
+  this->reset_session_key();
+}
+
 void TuyaBLENode::enqueue_command(TYBLECommand *command) {
   
   while(this->command_queue.size() >= this->max_queued) {
@@ -55,7 +77,10 @@ void TuyaBLENode::set_local_key(const char *local_key) {
   md5digest->calculate();
   md5digest->get_bytes(&this->login_key[0]);
   
-  ESP_LOGV(TAG, "Got local key (%s), turned into login key (%s)", local_key, binary_to_string(this->login_key, 16).c_str());
+  // Deliberately not logging local_key or the derived login_key, even at
+  // VERBOSE: both are secrets, and this component's whole README is about
+  // how much trouble a leaked/wrong one causes.
+  ESP_LOGV(TAG, "local_key configured, login_key derived");
 }
 
 void TuyaBLENode::set_max_queued(uint8_t max) {

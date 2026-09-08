@@ -147,6 +147,37 @@ docs/
   to explore freely; write DPs are not something to probe by trial and
   error.
 
+## Hardening notes (2026-09-08)
+
+An independent code review caught several real issues in the initial
+version of this fork - most usefully, that sensors only ever read their
+device once at boot and then never again, which defeats the point of a
+battery monitor. All of the following are fixed as of this commit:
+
+- Sensors now actually re-poll on a configurable `update_interval` (see
+  `docs/architecture.md`).
+- A vector `reserve()`/`operator[]` bug (undefined behavior, inherited from
+  upstream) is now a proper `resize()`.
+- `TYBLEClient::state()` wasn't virtual, silently breaking the connection
+  timeout in `tuya_ble_tracker.cpp` - it's virtual now.
+- The CCCD-enable write and the first encrypted request are no longer
+  racing; the latter now waits for GATT confirmation of the former (this
+  also surfaced a real BLE-stack quirk on the tested hardware, where that
+  confirmation event fires twice for one write - now de-duplicated).
+- An unrecognized/unsupported `security_flag` byte now aborts cleanly
+  instead of decrypting with an uninitialized key.
+- A decrypted frame's self-reported length is now sanity-checked before
+  it sizes a stack buffer - a wrong `local_key` producing garbage no longer
+  risks a stack overflow, just a dropped frame and a log line.
+- `local_key`/session key material is no longer written to the log, even
+  at VERBOSE.
+
+Not fixed, and deliberately out of scope for now (see `docs/troubleshooting.md`
+for why): full CRC16 verification of every received frame beyond the length
+sanity check above, and `secKey`/protocol-v2 support (`0x0E`/`0x0F` security
+flags) - this component only implements the classic scheme, which is what
+every device tested against it actually uses.
+
 ## Credits / prior art
 
 - [`BillyNate/esphome-tuya-ble`](https://github.com/BillyNate/esphome-tuya-ble) —

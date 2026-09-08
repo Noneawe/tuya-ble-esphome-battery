@@ -59,11 +59,11 @@ class TuyaBLEClient : public esp32_ble_client::BLEClientBase, virtual public TYB
 
     void connect() { esp32_ble_client::BLEClientBase::connect(); }
 
-    bool connected() { return esp32_ble_client::BLEClientBase::state() == esp32_ble_tracker::ClientState::ESTABLISHED; }
+    bool connected() override { return esp32_ble_client::BLEClientBase::state() == esp32_ble_tracker::ClientState::ESTABLISHED; }
 
     void disconnect() { esp32_ble_client::BLEClientBase::disconnect(); }
 
-    esp32_ble_tracker::ClientState state() const { return esp32_ble_client::BLEClientBase::state(); }
+    esp32_ble_tracker::ClientState state() const override { return esp32_ble_client::BLEClientBase::state(); }
 
     // Override existing methods:
     bool gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if, esp_ble_gattc_cb_param_t *param) override;
@@ -110,9 +110,22 @@ class TuyaBLEClient : public esp32_ble_client::BLEClientBase, virtual public TYB
 
     void process_data(TYBLENode *node);
 
-    void register_for_notifications();
+    // Returns true if a CCCD write was issued and the caller should wait for
+    // its ESP_GATTC_WRITE_DESCR_EVT confirmation before sending anything
+    // encrypted (see gattc_event_handler); false if there was nothing to
+    // wait for (no CCCD found) and the caller should proceed immediately.
+    bool register_for_notifications();
 
     void disconnect_check();
+
+    uint16_t cccd_handle_ = 0;
+
+    // Some BLE stacks (observed on real hardware, not just in theory)
+    // deliver ESP_GATTC_WRITE_DESCR_EVT for the same CCCD write more than
+    // once for a single connection. Without this guard that would trigger
+    // request_info() - and therefore a full extra device-info/pairing
+    // round trip - once per duplicate event.
+    bool device_info_requested_ = false;
 };
 
 }  // namespace tuya_ble_client

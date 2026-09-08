@@ -62,6 +62,25 @@ components before, the shape should feel familiar.
    big-endian integer (this is what sensor.py decodes), `3` for string, `4`
    for enum, `5` for bitmap.
 
+## Reading periodically, not just once at boot
+
+`tuya_ble_node` is a `PollingComponent` with a configurable `update_interval`
+(default 60s). On each tick, if the node has any sensor/binary_sensor DPs
+registered and isn't already mid-exchange, it calls `reset_session_key()` -
+that's the entire mechanism. Once the session key is cleared,
+`tuya_ble_tracker`'s existing connect-gating (`if (!has_session_key())`)
+naturally kicks off a fresh connect → pair → status-request cycle the next
+time the device's advertisement is seen, with no separate reconnect path
+needed. A node with only an `output` (nothing to poll for) just never calls
+this, matching the original upstream component's connect-on-write behavior.
+
+Note that some devices (the Parkside battery this was built against
+included) push a fresh full DP status on their own, unprompted, repeatedly
+over a single held-open connection - `update_interval` is still worth
+configuring for devices that don't do this, but don't be surprised if you
+never observe an actual disconnect/reconnect on one that does.
+
+
 Every frame (in either direction) is wrapped as
 `seq_num(4 BE) + response_to(4 BE) + code(2 BE) + data_len(2 BE) + data +
 CRC16(2 BE)`, padded to a multiple of 16 bytes, then

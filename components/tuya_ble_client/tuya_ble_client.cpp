@@ -184,8 +184,12 @@ void TuyaBLEClient::collect_data(unsigned char *data, size_t size) {
     }
     data_starts_at += 2;
 
+    // resize(), not reserve(): the vector's size() must actually cover
+    // data_collection_expected_size before we write into it via operator[]
+    // below, or every write past index 0 is undefined behavior even though
+    // the underlying allocation happens to be large enough.
     this->data_collected.clear();
-    this->data_collected.reserve(this->data_collection_expected_size);
+    this->data_collected.resize(this->data_collection_expected_size);
   }
   else {
     concatenated_length = this->data_collection_incrementor * 19 - 2;
@@ -221,12 +225,25 @@ void TuyaBLEClient::process_data(TYBLENode *node) {
     key = node->login_key;
   }
   else if(security_flag == Security::AUTH_KEY) {
-    //TODO: set auth key?
+    // AUTH_KEY-secured frames aren't supported: there's no auth_key material
+    // anywhere in this component to decrypt them with. Bail out cleanly
+    // instead of falling through to decrypt_data() with an uninitialized
+    // key pointer.
+    ESP_LOGW(TAG, "Received AUTH_KEY-secured frame, which isn't supported. Dropping it.");
+    this->data_collected.clear();
+    this->data_collection_state = DataCollectionState::NO_DATA;
+    return;
   }
-  else {
+  else if(security_flag == Security::SESSION_KEY) {
     key = node->session_key;
   }
-  
+  else {
+    ESP_LOGW(TAG, "Received frame with unrecognized security_flag=0x%02x. Dropping it.", security_flag);
+    this->data_collected.clear();
+    this->data_collection_state = DataCollectionState::NO_DATA;
+    return;
+  }
+
   unsigned char first_decrypted_part[AES_BLOCK_SIZE]{0};
   const size_t data_size_first_block = AES_BLOCK_SIZE - META_SIZE;
   size_t start_pos = sizeof(security_flag) + IV_SIZE;
@@ -240,6 +257,20 @@ void TuyaBLEClient::process_data(TYBLENode *node) {
   
   if(code == TuyaBLECode::FUN_SENDER_DEVICE_INFO) { // Don't need the full 84 bytes of data
     decrypted_size = 12; // Only need the srand, set to 30 to get the auth_key as well
+  }
+
+  // decrypted_size comes straight from the (possibly-garbage, if the key is
+  // wrong or the frame is corrupted) decrypted bytes and directly sizes a
+  // stack buffer below. A bogus large value here would blow the task's
+  // stack instead of just failing to parse - a real risk while debugging a
+  // not-yet-correct local_key, which is exactly when this is most likely to
+  // happen. No real Tuya BLE DP frame is anywhere near this size.
+  constexpr size_t MAX_PLAUSIBLE_DECRYPTED_SIZE = 512;
+  if(decrypted_size > MAX_PLAUSIBLE_DECRYPTED_SIZE) {
+    ESP_LOGW(TAG, "Decrypted frame claims implausible size %u (code=0x%04X) - likely a wrong local_key or corrupted frame. Dropping it.", decrypted_size, code);
+    this->data_collected.clear();
+    this->data_collection_state = DataCollectionState::NO_DATA;
+    return;
   }
 
   if(decrypted_size > 0) {
@@ -270,8 +301,8 @@ void TuyaBLEClient::process_data(TYBLENode *node) {
           md5digest->calculate();
           md5digest->get_bytes(&node->session_key[0]);
           ESP_LOGD(TAG, "Session key set!");
-
-          ESP_LOGV(TAG, "%s", binary_to_string(node->session_key, KEY_SIZE).c_str());
+          // Not logging the session key itself, even at VERBOSE - it's
+          // derived from the secret local_key and just as sensitive.
         }
         break;
 
@@ -302,13 +333,13 @@ void TuyaBLEClient::process_data(TYBLENode *node) {
   this->data_collection_state = DataCollectionState::NO_DATA;
 }
 
-void TuyaBLEClient::register_for_notifications() {
+bool TuyaBLEClient::register_for_notifications() {
   this->notification_char = this->get_characteristic(esp32_ble_tracker::ESPBTUUID::from_raw(uuid_info_service), esp32_ble_tracker::ESPBTUUID::from_raw(uuid_notification_char));
   this->write_char = this->get_characteristic(esp32_ble_tracker::ESPBTUUID::from_raw(uuid_info_service), esp32_ble_tracker::ESPBTUUID::from_raw(uuid_write_char));
 
   if(this->notification_char == nullptr || this->write_char == nullptr) {
     ESP_LOGE(TAG, "Could not find Tuya BLE info service characteristics! notification=%p write=%p", this->notification_char, this->write_char);
-    return;
+    return false;
   }
 
   ESP_LOGD(TAG, "notification_char handle=0x%x properties=0x%x, write_char handle=0x%x properties=0x%x",
@@ -322,19 +353,27 @@ void TuyaBLEClient::register_for_notifications() {
 
   // esp_ble_gattc_register_for_notify() only tells the local BLE stack to accept notifications;
   // the peer still needs its Client Characteristic Configuration Descriptor (0x2902) written to
-  // actually start sending them. Without this, the device never pushes any DP data.
+  // actually start sending them. Without this, the device never pushes any DP data. The caller
+  // must wait for ESP_GATTC_WRITE_DESCR_EVT before sending anything encrypted: sending the first
+  // request before the peer has actually enabled notifications is a race that can silently drop
+  // the response.
   auto *cccd = this->notification_char->get_descriptor(esp32_ble_tracker::ESPBTUUID::from_uint16(0x2902));
   if(cccd == nullptr) {
     ESP_LOGW(TAG, "No CCCD (0x2902) descriptor found on notification characteristic; device may never send notifications");
-  } else {
-    uint16_t notify_enable = 1;
-    esp_err_t descr_status = esp_ble_gattc_write_char_descr(this->get_gattc_if(), this->get_conn_id(), cccd->handle,
-                                                             sizeof(notify_enable), (uint8_t *) &notify_enable,
-                                                             ESP_GATT_WRITE_TYPE_RSP, ESP_GATT_AUTH_REQ_NONE);
-    if(descr_status) {
-      ESP_LOGW(TAG, "[%d] [%s] esp_ble_gattc_write_char_descr (CCCD) failed, status=%d", this->get_conn_id(), this->address_str_, descr_status);
-    }
+    return false;
   }
+
+  uint16_t notify_enable = 1;
+  esp_err_t descr_status = esp_ble_gattc_write_char_descr(this->get_gattc_if(), this->get_conn_id(), cccd->handle,
+                                                           sizeof(notify_enable), (uint8_t *) &notify_enable,
+                                                           ESP_GATT_WRITE_TYPE_RSP, ESP_GATT_AUTH_REQ_NONE);
+  if(descr_status) {
+    ESP_LOGW(TAG, "[%d] [%s] esp_ble_gattc_write_char_descr (CCCD) failed, status=%d", this->get_conn_id(), this->address_str_, descr_status);
+    return false;
+  }
+
+  this->cccd_handle_ = cccd->handle;
+  return true;
 }
 
 void TuyaBLEClient::register_node(uint64_t mac_address, TYBLENode *tuyaBLENode) {
@@ -389,12 +428,33 @@ bool TuyaBLEClient::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_
     case ESP_GATTC_SEARCH_CMPL_EVT:
     case ESP_GATTC_OPEN_EVT: {
       if(esp32_ble_client::BLEClientBase::state() == esp32_ble_tracker::ClientState::ESTABLISHED) {
-        this->register_for_notifications();
         if(!node->has_session_key()) {
           this->should_disconnect = false;
           node->seq_num = 1;
-          node->request_info();
+          if(!this->register_for_notifications() && !this->device_info_requested_) {
+            // No CCCD to wait for (or it failed) - nothing will confirm
+            // notifications are enabled, so send the request immediately
+            // as before rather than waiting forever.
+            this->device_info_requested_ = true;
+            node->request_info();
+          }
+          // else: wait for ESP_GATTC_WRITE_DESCR_EVT below.
         }
+      }
+      break;
+    }
+    case ESP_GATTC_WRITE_DESCR_EVT: {
+      if(param->write.handle == this->cccd_handle_ && !node->has_session_key() && !this->device_info_requested_) {
+        // Some BLE stacks deliver this event more than once for the same
+        // write (observed on real hardware); device_info_requested_ makes
+        // sure we only ever act on the first one per connection.
+        this->device_info_requested_ = true;
+        if(param->write.status == ESP_GATT_OK) {
+          ESP_LOGD(TAG, "CCCD write confirmed, notifications are enabled");
+        } else {
+          ESP_LOGW(TAG, "CCCD write failed with status=%d, requesting device info anyway", param->write.status);
+        }
+        node->request_info();
       }
       break;
     }
@@ -440,6 +500,7 @@ void TuyaBLEClient::connect_mac_address(const uint64_t mac_address) {
   this->remote_addr_type_ = BLE_ADDR_TYPE_PUBLIC;
 
   node->reset_session_key(); // New session key every new connection?
+  this->device_info_requested_ = false;
 }
 
 void TuyaBLEClient::disconnect_when_appropriate() {

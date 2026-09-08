@@ -52,6 +52,9 @@ tuya_ble_node:
     device_id: !secret tuya_device_id
     uuid: !secret tuya_uuid
     tuya_ble_client_id: tuya_client
+    # How often to reconnect and re-read all DPs. Only matters if you have
+    # sensor/binary_sensor entries below; a write-only `output` node ignores it.
+    update_interval: 60s
 
 sensor:
   - platform: tuya_ble_node

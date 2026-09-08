@@ -13,11 +13,18 @@ namespace tuya_ble_node {
 using namespace esphome::tuya_ble;
 using md5::MD5Digest;
 
-class TuyaBLENode : public TYBLENode, public Component {
-  
+class TuyaBLENode : public TYBLENode, public PollingComponent {
+
   std::deque<struct TYBLECommand> command_queue;
 
   public:
+    // Only meaningful if this node has any sensor/binary_sensor DPs
+    // registered: forces a fresh connect + status read on the configured
+    // update_interval, instead of reading the device's DPs once at boot
+    // and never again. A node with only an `output` (nothing to poll for)
+    // simply does nothing here.
+    void update() override;
+
     bool has_command();
 
     bool has_session_key();
