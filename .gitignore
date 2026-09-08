@@ -1,0 +1,10 @@
+secrets.yaml
+*.local.yaml
+.esphome/
+.pioenvs/
+.piolibdeps/
+__pycache__/
+*.pyc
+venv/
+.venv/
+*.log

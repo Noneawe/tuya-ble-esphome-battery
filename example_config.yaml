@@ -1,0 +1,80 @@
+# Example ESPHome configuration for reading Tuya BLE datapoints (DPs) as
+# native sensors, using the components in this repo.
+#
+# Copy this file, rename it, fill in secrets.yaml (see secrets.yaml.example),
+# and adjust the `sensor`/`binary_sensor` list to match YOUR device's DP
+# schema (see docs/getting-the-local-key.md and docs/finding-your-dp-ids.md).
+#
+# This example's DP mapping (dp_id 2/3/8/9/11/12/16/22) matches a Tuya
+# "Smart Battery" style device (category `dcb`). Your device will have a
+# different schema — check the Tuya IoT Platform "Specifications" tab for
+# your product, or just watch the debug log: every DP the device reports
+# gets logged at DEBUG level by the `tuya_ble_dp` tag even if you haven't
+# mapped it to a sensor yet.
+
+esphome:
+  name: tuya-ble-bridge
+
+esp32:
+  board: esp32-c3-devkitm-1
+  framework:
+    type: esp-idf
+
+logger:
+  level: DEBUG
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+external_components:
+  - source: components
+
+esp32_ble_tracker:
+
+tuya_ble_tracker:
+
+tuya_ble_client:
+  - id: tuya_client
+
+tuya_ble_node:
+  - id: my_tuya_device
+    mac_address: !secret tuya_mac_address
+    local_key: !secret tuya_local_key
+    device_id: !secret tuya_device_id
+    uuid: !secret tuya_uuid
+    tuya_ble_client_id: tuya_client
+
+sensor:
+  - platform: tuya_ble_node
+    tuya_ble_node_id: my_tuya_device
+    dp_id: 16
+    name: "Battery Percentage"
+    unit_of_measurement: "%"
+  - platform: tuya_ble_node
+    tuya_ble_node_id: my_tuya_device
+    dp_id: 11
+    name: "Temperature"
+    unit_of_measurement: "°C"
+  - platform: tuya_ble_node
+    tuya_ble_node_id: my_tuya_device
+    dp_id: 2
+    name: "Charge Current (mA)"
+  - platform: tuya_ble_node
+    tuya_ble_node_id: my_tuya_device
+    dp_id: 3
+    name: "Charge Voltage Raw (mV)"
+
+binary_sensor:
+  - platform: tuya_ble_node
+    tuya_ble_node_id: my_tuya_device
+    dp_id: 12
+    name: "Upper Temp Switch"
