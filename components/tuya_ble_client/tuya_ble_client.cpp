@@ -89,6 +89,16 @@ std::tuple<uint32_t, TuyaBLECode, size_t, uint32_t> TuyaBLEClient::decrypt_data(
     return std::make_tuple(0, TuyaBLECode::FUN_SENDER_DEVICE_INFO, 0, 0);
   }
 
+  // encrypted_size is the caller's account of how much ciphertext is really
+  // available at encrypted_data; size is how much esp_aes_crypt_cbc below
+  // will actually read from it. Callers are expected to have already sized
+  // `size` correctly, but this is a cheap last line of defense against a
+  // future caller (or a bug in one of today's two) that doesn't.
+  if(encrypted_size < size) {
+    ESP_LOGE(TAG, "Encrypted input too short: have %u, requested %u", (unsigned)encrypted_size, (unsigned)size);
+    return std::make_tuple(0, TuyaBLECode::FUN_SENDER_DEVICE_INFO, 0, 0);
+  }
+
   uint32_t seq_num;
   TuyaBLECode code;
   size_t decrypted_size;
@@ -302,6 +312,25 @@ void TuyaBLEClient::process_data(TYBLENode *node) {
   if(this->data_collection_expected_size < start_pos + AES_BLOCK_SIZE) {
     ESP_LOGW(TAG, "Encrypted frame too short to contain one AES block (expected_size=%u, need >= %u). Dropping it.",
              this->data_collection_expected_size, (unsigned)(start_pos + AES_BLOCK_SIZE));
+    this->reset_rx_state();
+    return;
+  }
+
+  // The block-count guard above only guarantees *one* full AES block is
+  // present. It doesn't guarantee the *total* ciphertext (past security_flag
+  // + IV) is itself block-aligned - e.g. expected_size=34 has 17 bytes of
+  // ciphertext, which clears the check above (>= 16) but leaves only 1 byte
+  // for whatever the second decrypt_data() call below decides it needs.
+  // decrypted_size (attacker/corrupted-key controlled) can pass the
+  // max_size_from_received_data bound further down while still rounding up
+  // to a `blocks` count whose *  AES_BLOCK_SIZE reads past the real
+  // ciphertext. Rejecting non-block-aligned ciphertext up front (this
+  // component's own encrypt_data() always produces block-aligned output, so
+  // any real frame from this protocol already satisfies this) closes that
+  // gap without needing to re-derive the bound at every later step.
+  const size_t ciphertext_size = this->data_collection_expected_size - start_pos;
+  if(ciphertext_size % AES_BLOCK_SIZE != 0) {
+    ESP_LOGW(TAG, "Encrypted payload size %u is not AES block aligned. Dropping it.", (unsigned)ciphertext_size);
     this->reset_rx_state();
     return;
   }
