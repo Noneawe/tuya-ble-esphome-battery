@@ -18,6 +18,46 @@ debugging a BLE "protocol bug" for hours that's actually a wrong credential.
 See [`docs/getting-the-local-key.md`](docs/getting-the-local-key.md) — read
 it before you flash anything.
 
+## Tested hardware
+
+This has been confirmed working end-to-end against a real device:
+
+| | |
+|---|---|
+| Manufacturer | PARKSIDE (Lidl's in-house power tool brand) |
+| Model | PAPP-208-A1, "X20V Team" cordless battery system |
+| Capacity | 20V / 8.0Ah |
+| Tuya category | `dcb` (Smart Battery 20V/8Ah) |
+| Tuya `product_id` | `r04rvmaq` |
+
+<img src="docs/images/parkside-x20v-8ah.jpg" alt="Parkside X20V Team 20V/8Ah battery" width="360">
+
+Confirmed-working datapoints, with a real example reading pulled live over
+BLE during testing:
+
+| DP ID | Name | Example live value |
+|---|---|---|
+| 16 | `battery_percentage` | 67 % |
+| 11 | `temp_current` | 25 °C |
+| 2 | `charge_current` | 0 mA (idle, not charging) |
+| 3 | `charge_voltage` | raw `18363` → 18.36 V (raw value is mV directly, see note below) |
+| 12 | `upper_temp_switch` | `false` |
+| 8 | `charge_times` | 6 |
+| 9 | `discharge_times` | 38 |
+
+**Note on `charge_voltage`:** Tuya's own DP metadata for this field specifies
+a `scale` value that, taken literally, would put the reading in the
+implausible ~1-2V range. The confirmed-correct reading treats the raw
+integer as millivolts directly, ignoring the `scale` field. This was only
+resolved by comparing a live decoded value against physical plausibility —
+don't trust either interpretation for your own device until you've done the
+same.
+
+The device also reports a number of additional, undocumented DPs (in the
+100s range) that haven't been mapped to a meaning yet — visible in the debug
+log, not required for the sensors above.
+
+
 ## Why this needs its own component at all
 
 ESPHome doesn't support Tuya's BLE protocol natively. Tuya devices encrypt
