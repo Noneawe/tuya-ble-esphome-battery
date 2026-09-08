@@ -17,12 +17,29 @@ CONF_UUID = 'uuid'
 
 MULTI_CONF = True
 
+
+def validate_local_key(value):
+    value = cv.string_strict(value)
+    if len(value) != 16:
+        raise cv.Invalid(
+            f"local_key must be exactly 16 characters (got {len(value)}). "
+            "A wrong-length value here will pair/decrypt incorrectly at "
+            "runtime instead of failing loudly like this - see "
+            "docs/getting-the-local-key.md for how to get a real one."
+        )
+    try:
+        value.encode("ascii")
+    except UnicodeEncodeError:
+        raise cv.Invalid("local_key must contain only ASCII characters") from None
+    return value
+
+
 CONFIG_SCHEMA = (
     cv.Schema(
         {
             cv.GenerateID(): cv.declare_id(TuyaBLENode),
             cv.Required(CONF_MAC_ADDRESS): cv.mac_address,
-            cv.Required(CONF_LOCAL_KEY): cv.string,
+            cv.Required(CONF_LOCAL_KEY): validate_local_key,
             cv.Optional(CONF_DEVICE_ID): cv.string,
             cv.Optional(CONF_UUID): cv.string,
             cv.Optional(CONF_MAX_QUEUED, default=1): cv.int_range(1, 10),

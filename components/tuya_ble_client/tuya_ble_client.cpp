@@ -266,8 +266,24 @@ void TuyaBLEClient::process_data(TYBLENode *node) {
   // not-yet-correct local_key, which is exactly when this is most likely to
   // happen. No real Tuya BLE DP frame is anywhere near this size.
   constexpr size_t MAX_PLAUSIBLE_DECRYPTED_SIZE = 512;
-  if(decrypted_size > MAX_PLAUSIBLE_DECRYPTED_SIZE) {
-    ESP_LOGW(TAG, "Decrypted frame claims implausible size %u (code=0x%04X) - likely a wrong local_key or corrupted frame. Dropping it.", decrypted_size, code);
+
+  // Separately, decrypted_size also drives how many bytes the second
+  // decrypt_data() call below reads out of data_collected - and it reads
+  // that many bytes regardless of how much ciphertext is actually left
+  // there (esp_aes_crypt_cbc's length comes from the destination buffer
+  // size, not from what's actually available at the source). A decrypted
+  // frame is only trustworthy up to however many real bytes we collected
+  // over BLE, so clamp against that too, not just the fixed cap above -
+  // otherwise a wrong key can still cause an out-of-bounds read of
+  // data_collected even while staying under MAX_PLAUSIBLE_DECRYPTED_SIZE.
+  size_t max_size_from_received_data = data_size_first_block;
+  if(this->data_collection_expected_size > start_pos + AES_BLOCK_SIZE) {
+    max_size_from_received_data += this->data_collection_expected_size - start_pos - AES_BLOCK_SIZE;
+  }
+
+  if(decrypted_size > MAX_PLAUSIBLE_DECRYPTED_SIZE || decrypted_size > max_size_from_received_data) {
+    ESP_LOGW(TAG, "Decrypted frame claims size %u but only %u bytes were actually received (code=0x%04X) - likely a wrong local_key or corrupted frame. Dropping it.",
+             decrypted_size, max_size_from_received_data, code);
     this->data_collected.clear();
     this->data_collection_state = DataCollectionState::NO_DATA;
     return;
@@ -293,13 +309,16 @@ void TuyaBLEClient::process_data(TYBLENode *node) {
             ESP_LOGD(TAG, "DEVICE INFO response too short");
             return;
           }
-          MD5Digest *md5digest = new MD5Digest();
-    
-          md5digest->init();
-          md5digest->add(node->local_key, 6);
-          md5digest->add(&decrypted_data[6], 6);
-          md5digest->calculate();
-          md5digest->get_bytes(&node->session_key[0]);
+          // Stack-allocated: this runs on every reconnect now that polling
+          // exists, so a `new` here with no matching `delete` (as upstream
+          // had it) would leak 16+ bytes of heap on every single poll cycle.
+          MD5Digest md5digest;
+
+          md5digest.init();
+          md5digest.add(node->local_key, 6);
+          md5digest.add(&decrypted_data[6], 6);
+          md5digest.calculate();
+          md5digest.get_bytes(&node->session_key[0]);
           ESP_LOGD(TAG, "Session key set!");
           // Not logging the session key itself, even at VERBOSE - it's
           // derived from the secret local_key and just as sensitive.

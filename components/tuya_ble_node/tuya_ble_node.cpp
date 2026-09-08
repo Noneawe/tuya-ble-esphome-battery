@@ -70,12 +70,12 @@ void TuyaBLENode::set_local_key(const char *local_key) {
 
   memcpy(this->local_key, local_key, 6);
 
-  MD5Digest *md5digest = new MD5Digest();
-  
-  md5digest->init();
-  md5digest->add(local_key, 6);
-  md5digest->calculate();
-  md5digest->get_bytes(&this->login_key[0]);
+  MD5Digest md5digest;
+
+  md5digest.init();
+  md5digest.add(local_key, 6);
+  md5digest.calculate();
+  md5digest.get_bytes(&this->login_key[0]);
   
   // Deliberately not logging local_key or the derived login_key, even at
   // VERBOSE: both are secrets, and this component's whole README is about

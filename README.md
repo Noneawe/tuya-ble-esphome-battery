@@ -172,6 +172,36 @@ battery monitor. All of the following are fixed as of this commit:
 - `local_key`/session key material is no longer written to the log, even
   at VERBOSE.
 
+### Round 2 (same day)
+
+A follow-up review of the round-1 fixes caught two more real issues, plus
+correctly flagged (but appropriately hedged) the `tuya_ble_node`/`tuya_ble`
+namespace situation as worth double-checking with a clean build rather than
+trusting that it happened to compile before:
+
+- **A real, repeating heap leak.** `FUN_SENDER_DEVICE_INFO` handling did
+  `new MD5Digest()` with no matching `delete` - harmless as a one-time leak
+  when this only ran once at boot, but a genuine repeating leak once
+  `update_interval` polling (round 1, above) made it run on every
+  reconnect. Fixed: stack-allocated, no heap involved.
+- **The 512-byte cap from round 1 wasn't enough on its own.** The second
+  `decrypt_data()` call sizes its read by the *destination* buffer length,
+  not by how much ciphertext was actually received - so a wrong key
+  producing a `decrypted_size` up to 512 could still read past the end of
+  the real (possibly much shorter) received buffer. Fixed: also clamped
+  against the actual number of bytes collected over BLE for this frame, not
+  just the fixed upper bound.
+- `local_key` is now validated at config time to be exactly 16 ASCII
+  characters, instead of accepting any string and failing confusingly at
+  runtime.
+- **Namespace check, settled properly:** did a fresh `git clone` into a
+  clean directory (no reused build cache) and ran `esphome compile` on
+  `example_config.yaml` from scratch - compiles cleanly. `tuya_ble_node.h`
+  has `using namespace esphome::tuya_ble;` inside `namespace tuya_ble_node`,
+  which is what makes `tuya_ble_node::TuyaBLESensor` correctly resolve to
+  the class actually defined in `tuya_ble`. Legal C++, not an accident, but
+  a legitimate thing to ask for proof of rather than take on faith.
+
 Not fixed, and deliberately out of scope for now (see `docs/troubleshooting.md`
 for why): full CRC16 verification of every received frame beyond the length
 sanity check above, and `secKey`/protocol-v2 support (`0x0E`/`0x0F` security
