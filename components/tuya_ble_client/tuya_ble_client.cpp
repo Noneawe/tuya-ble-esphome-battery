@@ -181,15 +181,22 @@ void TuyaBLEClient::collect_data(unsigned char *data, size_t size) {
   this->data_collection_incrementor = data[0];
 
   if(data[0] == 0x00) { // if new sequence of packets is received; reset (do not wait for potential existing sequence to finish)
-    if(size < 2) {
-      ESP_LOGW(TAG, "Initial BLE fragment too short to contain a length byte, ignoring");
+    // Thresholds match the final data_starts_at this branch computes (3, or
+    // 4 when the varint continuation byte is present), not just what's
+    // needed to safely read data[1]/data[2] - a fragment that clears the
+    // per-byte read but is still shorter than data_starts_at would underflow
+    // `size - data_starts_at` below (size_t, so this wraps to a huge value).
+    if(size < 3) {
+      ESP_LOGW(TAG, "Initial BLE fragment too short, ignoring");
+      this->reset_rx_state();
       return;
     }
     this->data_collection_state = DataCollectionState::COLLECTING;
     this->data_collection_expected_size = data[1];
     if(data[1] >= 128) {
-      if(size < 3) {
-        ESP_LOGW(TAG, "Initial BLE fragment too short to contain a varint continuation byte, ignoring");
+      if(size < 4) {
+        ESP_LOGW(TAG, "Initial BLE varint fragment too short, ignoring");
+        this->reset_rx_state();
         return;
       }
       data_starts_at ++;
@@ -214,8 +221,18 @@ void TuyaBLEClient::collect_data(unsigned char *data, size_t size) {
     }
   }
 
+  // Belt-and-suspenders on top of the size checks above: catches any future
+  // header-format change that under-guards data_starts_at, and prevents the
+  // size_t underflow on the next line from ever being computed.
+  if(size < data_starts_at) {
+    ESP_LOGW(TAG, "BLE fragment shorter than its own header, ignoring");
+    this->reset_rx_state();
+    return;
+  }
+
   if(concatenated_length + (size - data_starts_at) > this->data_collection_expected_size) {
     ESP_LOGW(TAG, "Not enough space allocated for received data!");
+    this->reset_rx_state();
     return;
   }
   memcpy(&this->data_collected[concatenated_length], &data[data_starts_at], size - data_starts_at);
